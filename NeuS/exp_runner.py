@@ -31,7 +31,7 @@ def ranking_loss(error, penalize_ratio=0.7, type='mean'):
 
 class Runner:
     def __init__(self, conf_path, mode='train', case='CASE_NAME', is_continue=False, data_dir=None):
-        self.device = torch.device('cuda')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # Configuration
         self.conf_path = conf_path
@@ -46,11 +46,13 @@ class Runner:
         self.base_exp_dir = self.conf['general.base_exp_dir']
         os.makedirs(self.base_exp_dir, exist_ok=True)
         self.dataset = Dataset(self.conf['dataset'])
+        self.num_workers = self.conf.get_int('train.num_workers', default=64)
+        self.final_mesh_resolution = self.conf.get_int('train.final_mesh_resolution', default=256)
         self.dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_size=self.conf['train']['batch_size'],
             shuffle=True,
-            num_workers=64,
+            num_workers=self.num_workers,
         )
         self.iter_step = 1
 
@@ -127,13 +129,17 @@ class Runner:
 
         print("training ", num_train_epochs, " epoches")
 
+        stop_training = False
         for epoch in range(num_train_epochs):
             # for iter_i in tqdm(range(res_step)):
             print("epoch ", epoch)
             for iter_i, data in enumerate(self.dataloader):
+                if self.iter_step >= self.end_iter:
+                    stop_training = True
+                    break
                 # img_idx = image_perm[self.iter_step % len(image_perm)]
                 # data = self.dataset.gen_random_rays_at(img_idx, self.batch_size)
-                data = data.cuda()
+                data = data.to(self.device)
 
                 rays_o, rays_d, true_rgb, mask, true_normal, cosines = (
                     data[:, :3],
@@ -148,7 +154,7 @@ class Runner:
 
                 background_rgb = None
                 if self.use_white_bkgd:
-                    background_rgb = torch.ones([1, 3])
+                    background_rgb = torch.ones([1, 3], device=self.device)
 
                 if self.mask_weight > 0.0:
                     mask = (mask > 0.5).float()
@@ -259,6 +265,9 @@ class Runner:
                 if self.iter_step % len(image_perm) == 0:
                     image_perm = self.get_image_perm()
 
+            if stop_training:
+                break
+
     def get_image_perm(self):
         return torch.randperm(self.dataset.n_images)
 
@@ -293,7 +302,7 @@ class Runner:
         copyfile(self.conf_path, os.path.join(self.base_exp_dir, 'recording', 'config.conf'))
 
     def load_checkpoint(self, checkpoint_name):
-        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device)
+        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device, weights_only=False)
         self.nerf_outside.load_state_dict(checkpoint['nerf'])
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
@@ -336,7 +345,7 @@ class Runner:
         for rays_o_batch, rays_d_batch in zip(rays_o, rays_d):
             # near, far = self.dataset.near_far_from_sphere(rays_o_batch, rays_d_batch)
             near, far = self.dataset.get_near_far()
-            background_rgb = torch.ones([1, 3]) if self.use_white_bkgd else None
+            background_rgb = torch.ones([1, 3], device=self.device) if self.use_white_bkgd else None
 
             render_out = self.renderer.render(
                 rays_o_batch, rays_d_batch, near, far, cos_anneal_ratio=self.get_cos_anneal_ratio(), background_rgb=background_rgb
@@ -413,7 +422,7 @@ class Runner:
         for rays_o_batch, rays_d_batch in zip(rays_o, rays_d):
             # near, far = self.dataset.near_far_from_sphere(rays_o_batch, rays_d_batch)
             near, far = self.dataset.get_near_far()
-            background_rgb = torch.ones([1, 3]) if self.use_white_bkgd else None
+            background_rgb = torch.ones([1, 3], device=self.device) if self.use_white_bkgd else None
 
             render_out = self.renderer.render(
                 rays_o_batch, rays_d_batch, near, far, cos_anneal_ratio=self.get_cos_anneal_ratio(), background_rgb=background_rgb
@@ -471,7 +480,7 @@ class Runner:
         for rays_o_batch, rays_d_batch in zip(rays_o, rays_d):
             # near, far = self.dataset.near_far_from_sphere(rays_o_batch, rays_d_batch)
             near, far = self.dataset.get_near_far()
-            background_rgb = torch.ones([1, 3]) if self.use_white_bkgd else None
+            background_rgb = torch.ones([1, 3], device=self.device) if self.use_white_bkgd else None
 
             render_out = self.renderer.render(
                 rays_o_batch, rays_d_batch, near, far, cos_anneal_ratio=self.get_cos_anneal_ratio(), background_rgb=background_rgb
@@ -541,12 +550,13 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    torch.cuda.set_device(args.gpu)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu)
     runner = Runner(args.conf, args.mode, args.case, args.is_continue, args.data_dir)
 
     if args.mode == 'train':
         runner.train()
-        runner.validate_mesh(world_space=False, resolution=256, threshold=args.mcube_threshold)
+        runner.validate_mesh(world_space=False, resolution=runner.final_mesh_resolution, threshold=args.mcube_threshold)
     elif args.mode == 'save_maps':
         for i in range(4):
             runner.save_maps(idx=i, img_idx=runner.dataset.object_viewidx)

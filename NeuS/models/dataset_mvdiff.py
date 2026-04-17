@@ -91,7 +91,7 @@ def load_a_prediction(root_dir, test_object, imSize, view_types, load_color=Fals
         normal_filepath = os.path.join(root_dir,test_object, 'normals_000_%s.png'%( view))
         # Load key frame
         if load_color:  # use bgr
-            image =np.array(PIL.Image.open(normal_filepath.replace("normals", "rgb")).resize(imSize))[:, :, ::-1]
+            image = np.array(PIL.Image.open(normal_filepath.replace("normals", "rgb")).convert("RGB").resize(imSize))[:, :, ::-1]
 
         normal = np.array(PIL.Image.open(normal_filepath).resize(imSize))
         mask = normal[:, :, 3]
@@ -131,7 +131,7 @@ class Dataset:
     def __init__(self, conf):
         super(Dataset, self).__init__()
         print('Load data: Begin')
-        self.device = torch.device('cuda')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.conf = conf
 
         self.data_dir = conf.get_string('data_dir')
@@ -208,10 +208,10 @@ class Dataset:
 
         # orthogonal projection
         rays_v = v / torch.linalg.norm(v, ord=2, dim=-1, keepdim=True)  # W, H, 3
-        rays_v = torch.matmul(self.pose_all[img_idx, None, None, :3, :3].cuda(), rays_v[:, :, :, None].cuda()).squeeze()  # W, H, 3
+        rays_v = torch.matmul(self.pose_all[img_idx, None, None, :3, :3].to(self.device), rays_v[:, :, :, None].to(self.device)).squeeze()  # W, H, 3
         
-        rays_o = torch.matmul(self.pose_all[img_idx, None, None, :3, :3].cuda(), q[:, :, :, None].cuda()).squeeze()  # W, H, 3
-        rays_o = self.pose_all[img_idx, None, None, :3, 3].expand(rays_v.shape).cuda() + rays_o  # W, H, 3
+        rays_o = torch.matmul(self.pose_all[img_idx, None, None, :3, :3].to(self.device), q[:, :, :, None].to(self.device)).squeeze()  # W, H, 3
+        rays_o = self.pose_all[img_idx, None, None, :3, 3].expand(rays_v.shape).to(self.device) + rays_o  # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)
 
     def gen_random_rays_at(self, img_idx, batch_size):
@@ -237,7 +237,7 @@ class Dataset:
         rays_o = torch.matmul(self.pose_all[img_idx, None, :3, :3], q[:, :, None]).squeeze()  # batch_size, 3
         rays_o = self.pose_all[img_idx, None, :3, 3].expand(rays_v.shape) + rays_o # batch_size, 3
         
-        return torch.cat([rays_o.cpu(), rays_v.cpu(), color, mask[:, None], normal], dim=-1).cuda()    # batch_size, 10
+        return torch.cat([rays_o.cpu(), rays_v.cpu(), color, mask[:, None], normal], dim=-1).to(self.device)    # batch_size, 10
 
     def prepare_rays_a_view(self, img_idx):
         """
@@ -310,8 +310,8 @@ class Dataset:
         pose[:3, :3] = rot.as_matrix()
         pose[:3, 3] = ((1.0 - ratio) * pose_0 + ratio * pose_1)[:3, 3]
         pose = np.linalg.inv(pose)
-        rot = torch.from_numpy(pose[:3, :3]).cuda()
-        trans = torch.from_numpy(pose[:3, 3]).cuda()
+        rot = torch.from_numpy(pose[:3, :3]).to(self.device)
+        trans = torch.from_numpy(pose[:3, 3]).to(self.device)
         rays_v = torch.matmul(rot[None, None, :3, :3], rays_v[:, :, :, None]).squeeze()  # W, H, 3
         rays_o = trans[None, None, :3].expand(rays_v.shape)  # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)

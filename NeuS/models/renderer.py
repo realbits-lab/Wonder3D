@@ -7,7 +7,7 @@ import mcubes
 from icecream import ic
 import pdb
 
-def extract_fields(bound_min, bound_max, resolution, query_func):
+def extract_fields(bound_min, bound_max, resolution, query_func, device=None):
     N = 64
     X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
     Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
@@ -20,14 +20,15 @@ def extract_fields(bound_min, bound_max, resolution, query_func):
                 for zi, zs in enumerate(Z):
                     xx, yy, zz = torch.meshgrid(xs, ys, zs)
                     pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)
-                    val = query_func(pts.cuda()).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy()
+                    target_device = device if device is not None else pts.device
+                    val = query_func(pts.to(target_device)).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy()
                     u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
     return u
 
 
-def extract_geometry(bound_min, bound_max, resolution, threshold, query_func, color_func):
+def extract_geometry(bound_min, bound_max, resolution, threshold, query_func, color_func, device=None):
     print('threshold: {}'.format(threshold))
-    u = extract_fields(bound_min, bound_max, resolution, query_func)
+    u = extract_fields(bound_min, bound_max, resolution, query_func, device=device)
     vertices, triangles = mcubes.marching_cubes(u, threshold)
     b_max_np = bound_max.detach().cpu().numpy()
     b_min_np = bound_min.detach().cpu().numpy()
@@ -380,7 +381,8 @@ class NeuSRenderer:
     
 
         # - randomly sample points from the volume, and maximize the sdf
-        pts_random = torch.rand([1024, 3]).float().cuda() * 2 - 1  # normalized to (-1, 1)
+        device = next(self.sdf_network.parameters()).device
+        pts_random = torch.rand([1024, 3], device=device).float() * 2 - 1  # normalized to (-1, 1)
         sdf_random =  self.sdf_network(pts_random)[:, :1]
 
         sparse_loss_1 = torch.exp(
@@ -413,7 +415,8 @@ class NeuSRenderer:
         verts_colors = []
         with torch.no_grad():
             for vi in range(0, V, bn):
-                verts = torch.from_numpy(vertices[vi:vi+bn].astype(np.float32)).cuda()
+                device = next(self.sdf_network.parameters()).device
+                verts = torch.from_numpy(vertices[vi:vi+bn].astype(np.float32)).to(device)
                 feats = self.sdf_network(verts)[..., 1:]
                 # pdb.set_trace()
                 gradients = self.sdf_network.gradient(verts)  # ...,3
@@ -432,4 +435,5 @@ class NeuSRenderer:
                                 resolution=resolution,
                                 threshold=threshold,
                                 query_func=lambda pts: -self.sdf_network.sdf(pts),
-                                color_func=lambda pts: self.get_vertex_colors(pts))
+                                color_func=lambda pts: self.get_vertex_colors(pts),
+                                device=next(self.sdf_network.parameters()).device)
