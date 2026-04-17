@@ -26,7 +26,7 @@ def extract_fields(bound_min, bound_max, resolution, query_func, device=None):
     return u
 
 
-def extract_geometry(bound_min, bound_max, resolution, threshold, query_func, color_func, device=None):
+def extract_geometry(bound_min, bound_max, resolution, threshold, query_func, color_func=None, device=None):
     print('threshold: {}'.format(threshold))
     u = extract_fields(bound_min, bound_max, resolution, query_func, device=device)
     vertices, triangles = mcubes.marching_cubes(u, threshold)
@@ -35,7 +35,7 @@ def extract_geometry(bound_min, bound_max, resolution, threshold, query_func, co
 
     vertices = vertices / (resolution - 1.0) * (b_max_np - b_min_np)[None, :] + b_min_np[None, :]
 
-    vertices_color = color_func(vertices)
+    vertices_color = color_func(vertices) if color_func is not None else None
 
     return vertices, triangles, vertices_color
 
@@ -429,11 +429,11 @@ class NeuSRenderer:
         verts_colors = (np.concatenate(verts_colors, 0)*255).astype(np.uint8)
         return verts_colors[:, ::-1]
     
-    def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0):
+    def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0, include_vertex_colors=True):
         return extract_geometry(bound_min,
                                 bound_max,
                                 resolution=resolution,
                                 threshold=threshold,
                                 query_func=lambda pts: -self.sdf_network.sdf(pts),
-                                color_func=lambda pts: self.get_vertex_colors(pts),
+                                color_func=(lambda pts: self.get_vertex_colors(pts)) if include_vertex_colors else None,
                                 device=next(self.sdf_network.parameters()).device)

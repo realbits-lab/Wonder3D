@@ -48,6 +48,7 @@ class Runner:
         self.dataset = Dataset(self.conf['dataset'])
         self.num_workers = self.conf.get_int('train.num_workers', default=64)
         self.final_mesh_resolution = self.conf.get_int('train.final_mesh_resolution', default=256)
+        self.export_vertex_color = self.conf.get_bool('train.export_vertex_color', default=True)
         self.dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_size=self.conf['train']['batch_size'],
@@ -497,13 +498,13 @@ class Runner:
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=torch.float32)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=torch.float32)
 
-        vertices, triangles, vertex_colors = self.renderer.extract_geometry(bound_min, bound_max, resolution=resolution, threshold=threshold)
+        vertices, triangles, vertex_colors = self.renderer.extract_geometry(bound_min, bound_max, resolution=resolution, threshold=threshold, include_vertex_colors=self.export_vertex_color)
         os.makedirs(os.path.join(self.base_exp_dir, 'meshes'), exist_ok=True)
 
         if world_space:
             vertices = vertices * self.dataset.scale_mats_np[0][0, 0] + self.dataset.scale_mats_np[0][:3, 3][None]
 
-        mesh = trimesh.Trimesh(vertices, triangles, vertex_colors=vertex_colors)
+        mesh = trimesh.Trimesh(vertices, triangles, vertex_colors=vertex_colors) if vertex_colors is not None else trimesh.Trimesh(vertices, triangles)
         # mesh.export(os.path.join(self.base_exp_dir, 'meshes', '{:0>8d}.ply'.format(self.iter_step)))
         # export as glb
         mesh.export(os.path.join(self.base_exp_dir, 'meshes', 'tmp.glb'))
